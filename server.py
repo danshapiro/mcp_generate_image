@@ -25,8 +25,8 @@ from urllib.parse import urlparse
 import google.genai as genai
 from google.genai import types
 from mcp.server.fastmcp import Context, FastMCP
-from pydantic import Field
-from typing import Literal, Annotated
+from pydantic import BaseModel, Field, ValidationError
+from typing import Literal
 from PIL import Image
 
 BASE_DIR = Path(__file__).parent
@@ -218,50 +218,93 @@ def _decode_inline_image(payload: object) -> bytes:
 
 server = FastMCP(
     name="mcp_generate_image",
-    instructions="Generate images. Pass a prompt plus optional quality knobs.",
+    instructions="Single-string interface. Call with 'help' to receive JSON schema instructions; otherwise pass JSON wrapped in braces.",
 )
+
+class ImageRequest(BaseModel):
+    prompt: str = Field(..., min_length=1, description="Natural-language description of the desired image.")
+    output_dir: str = Field(
+        ...,
+        min_length=1,
+        description="Existing directory path where lossless WebP files will be saved. Directory must already exist.",
+    )
+    reference_images: Optional[list[str]] = Field(
+        default=None,
+        description=(
+            "Optional list (max 14) of local file paths or http(s) URLs used for conditioning. "
+            "In the prompt, describe each reference image and its role without using filenames "
+            "(e.g., 'restyle the dog in the style of the watercolor')."
+        ),
+    )
+    aspect_ratio: Optional[
+        Literal["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"]
+    ] = Field(
+        default=None,
+        description="Optional aspect ratio; must be one of the allowed presets.",
+    )
+    image_size: Literal["1K", "2K", "4K"] = Field(
+        default="2K",
+        description="Render size preset; 2K is the default for quality/speed balance.",
+    )
+    negative_prompt: Optional[str] = Field(
+        default=None,
+        description="Content to avoid (may be ignored by preview surface).",
+    )
+    seed: Optional[int] = Field(
+        default=None,
+        description="Optional deterministic seed when supported.",
+    )
+
+
+def _help_payload() -> dict:
+    instructions = (
+        "image_generate takes a single string argument. Call with JSON wrapped in braces to generate an image. "
+        "If you need guidance, call with 'help' (or any string without braces) to receive this documentation. "
+        "Fields: "
+        "prompt (required string), "
+        "output_dir (required existing directory), "
+        "reference_images (optional list of up to 14 file paths or http(s) URLs; describe each in the prompt without filenames), "
+        "aspect_ratio (optional preset: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 9:21), "
+        "image_size (1K, 2K [default], 4K), "
+        "negative_prompt (optional), "
+        "seed (optional). "
+        "Output is always lossless WebP; the directory must already exist."
+    )
+    return {"instructions": instructions, "schema": ImageRequest.model_json_schema()}
 
 
 @server.tool(
     name="image_generate",
     title="Generate image",
-    description="Generate images with the configured Gemini image model.",
+    description="Single-string entrypoint; call with 'help' to see the JSON schema, or pass JSON in braces to generate.",
 )
 async def generate_image(
-    prompt: str,
-    *,
-    output_dir: Annotated[str, Field(min_length=1)],
-    reference_images: Annotated[
-        Optional[list[str]],
-        Field(
-            description=(
-                "Optional list (max 14) of local file paths or http(s) URLs to images for conditioning. "
-                "In your prompt, describe each reference image and its role without using filenames "
-                "(e.g., say 'restyle the dog in the style of the watercolor' rather than citing file names)."
-            )
-        ),
-    ] = None,
-    aspect_ratio: Optional[
-        Literal["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"]
-    ] = None,
-    image_size: Literal["1K", "2K", "4K"] = "2K",
-    negative_prompt: Optional[str] = None,
-    seed: Optional[int] = None,
+    request: str,
     ctx: Optional[Context] = None,
 ) -> dict:
     """
     Generate an image with the configured Gemini image model.
 
-    Args:
-        prompt: Natural language description of the desired image.
-        reference_images: Optional list (max 14) of local file paths or http(s) URLs to images for conditioning.
-        aspect_ratio: Must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 9:21.
-        image_size: \"1K\", \"2K\", or \"4K\" (higher = larger & slower).
-        negative_prompt: Content to avoid.
-        seed: Deterministic seed for reproducibility.
+    Single-string entrypoint: send 'help' (or any string without braces) to receive the schema and guidance.
     """
 
-    prompt = prompt.strip()
+    if "{" not in request or "}" not in request or request.find("{") >= request.rfind("}"):
+        return _help_payload()
+
+    try:
+        start = request.find("{")
+        end = request.rfind("}") + 1
+        payload = request[start:end]
+        data = json.loads(payload)
+    except json.JSONDecodeError as e:
+        return {"error": f"Invalid JSON payload: {e}"}
+
+    try:
+        req = ImageRequest.model_validate(data)
+    except ValidationError as e:
+        return {"error": e.errors()}
+
+    prompt = req.prompt.strip()
     if not prompt:
         raise ValueError("prompt is empty or whitespace; please supply descriptive text to generate an image.")
 
@@ -274,19 +317,21 @@ async def generate_image(
     if not safe_prompt:
         raise ValueError("prompt sanitization produced an empty filename stem; include at least one alphanumeric character.")
 
-    out_dir = Path(output_dir).expanduser()
+    out_dir = Path(req.output_dir).expanduser()
     if not out_dir.exists():
-        raise ValueError(f"output_dir '{output_dir}' does not exist; please create it first.")
+        raise ValueError(f"output_dir '{req.output_dir}' does not exist; please create it first.")
     if not out_dir.is_dir():
-        raise ValueError(f"output_dir '{output_dir}' is not a directory.")
+        raise ValueError(f"output_dir '{req.output_dir}' is not a directory.")
 
     client = resolve_client()
 
     allowed_ratios = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"}
+    aspect_ratio = req.aspect_ratio
     if aspect_ratio and aspect_ratio not in allowed_ratios:
         raise ValueError(f"aspect_ratio must be one of {sorted(allowed_ratios)}")
 
     image_parts: list[types.Part] = []
+    reference_images = req.reference_images
     if reference_images:
         if len(reference_images) > MAX_REFERENCE_IMAGES:
             raise ValueError(f"reference_images supports up to {MAX_REFERENCE_IMAGES} items.")
@@ -298,7 +343,7 @@ async def generate_image(
         response_modalities=["IMAGE"],
         image_config=types.ImageConfig(
             aspect_ratio=aspect_ratio,
-            image_size=image_size,
+            image_size=req.image_size,
         ),
         # NOTE: negative prompts and seeds are not exposed in the current preview generate_content surface.
     )
@@ -313,8 +358,8 @@ async def generate_image(
         "image_model.request",
         prompt=prompt[:240],
         aspect_ratio=aspect_ratio,
-        image_size=image_size,
-        seed=seed,
+        image_size=req.image_size,
+        seed=req.seed,
         reference_images=len(reference_images or []),
         safety_filter_level="BLOCK_NONE",
         person_generation="ALLOW_ALL",
@@ -363,7 +408,7 @@ async def generate_image(
             {
                 "path": path,
                 "mime_type": mime,
-                "seed": seed,
+                "seed": req.seed,
                 "enhanced_prompt": None,
                 "safety": None,
             }

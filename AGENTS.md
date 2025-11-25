@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Modules
-- `server.py`: MCP stdio server exposing the `image_generate` tool; Gemini client, logging, WebP conversion.
+- `server.py`: MCP stdio server exposing the `image_generate` tool (single-string interface with JSON payload); Gemini client, logging, WebP conversion.
 - `requirements.txt`: minimal runtime deps (google-genai, Pillow, fastmcp).
 - `README.md`: only end-user doc; keep it the single source for user-facing instructions.
 - `outputs/`: default sample output location; other `output_dir` paths must already exist before calls.
@@ -17,13 +17,13 @@
   python -m venv .venv-wsl && source .venv-wsl/bin/activate && pip install -r requirements.txt
   ```
 - Run the MCP server locally: `python server.py`
-- Smoke-test via Codex (from repo):  
+- Smoke-test via Codex (single-string param):  
   ```bash
-  codex exec --skip-git-repo-check "Call the mcp_generate_image.image_generate tool with prompt \"tiny line art\" and output_dir \"outputs\"."
+  codex exec --skip-git-repo-check "Call mcp_generate_image.image_generate with '{\"prompt\":\"tiny line art\",\"output_dir\":\"outputs\"}'"
   ```
   If `codex` is not on PATH, try Claude CLI:  
   ```bash
-  claude mcp call mcp_generate_image image_generate --param prompt "tiny line art" --param output_dir outputs
+  claude mcp call mcp_generate_image image_generate --param request "{ \"prompt\": \"tiny line art\", \"output_dir\": \"outputs\" }"
   ```
 
 ## Coding Style & Naming
