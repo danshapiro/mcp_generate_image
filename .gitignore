@@ -1,0 +1,6 @@
+.venv/
+.venv-wsl/
+__pycache__/
+*.pyc
+outputs/
+*.log
