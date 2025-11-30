@@ -30,6 +30,7 @@ from typing import Literal
 from PIL import Image
 
 BASE_DIR = Path(__file__).parent
+MIN_GENAI_VERSION = (1, 52, 0)
 MAX_REFERENCE_IMAGES = 14
 MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20MB hard cap to match Gemini guidance
 ALLOWED_REF_FORMATS = {"PNG": "image/png", "JPEG": "image/jpeg", "JPG": "image/jpeg", "WEBP": "image/webp"}
@@ -216,6 +217,18 @@ def _decode_inline_image(payload: object) -> bytes:
     return data
 
 
+def _parse_version(version_str: str | None) -> Optional[tuple[int, int, int]]:
+    """Best-effort semantic version parsing; returns None if unknown."""
+    if not version_str:
+        return None
+    parts = version_str.split(".")
+    try:
+        major, minor, patch = (int(parts[i]) if i < len(parts) else 0 for i in range(3))
+        return (major, minor, patch)
+    except Exception:
+        return None
+
+
 server = FastMCP(
     name="mcp_generate_image",
     instructions="BEFORE YOU USE THIS, call with the string 'help'.",
@@ -304,6 +317,23 @@ async def generate_image(
         raise ValueError(f"output_dir '{req.output_dir}' is not a directory.")
 
     client = resolve_client()
+
+    sdk_version_str = getattr(genai, "__version__", None)
+    sdk_version = _parse_version(sdk_version_str)
+    if sdk_version and sdk_version < MIN_GENAI_VERSION:
+        log_event(
+            "warning",
+            "google_genai_outdated",
+            sdk_version=sdk_version_str,
+            minimum=".".join(map(str, MIN_GENAI_VERSION)),
+        )
+        return {
+            "error": (
+                "Installed google-genai SDK is out of date; suggest upgrading to version 1.52.0 or newer."
+            ),
+            "sdk_version": sdk_version_str,
+            "minimum_required": ".".join(map(str, MIN_GENAI_VERSION)),
+        }
 
     allowed_ratios = {"1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"}
     aspect_ratio = req.aspect_ratio
