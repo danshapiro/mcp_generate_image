@@ -252,11 +252,11 @@ def _help_payload() -> dict:
     )
     return {"instructions": instructions, "schema": ImageRequest.model_json_schema()}
 
-
+# Note - this is the definition provided to the caller.
 @server.tool(
     name="image_generate",
     title="Generate image",
-    description="Single-string entrypoint; call with 'help' to see the JSON schema, or pass JSON in braces to generate.",
+    description="Single-string entrypoint; call with 'help' to learn how to use it.",
 )
 async def generate_image(
     request: str,
