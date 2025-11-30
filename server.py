@@ -218,57 +218,37 @@ def _decode_inline_image(payload: object) -> bytes:
 
 server = FastMCP(
     name="mcp_generate_image",
-    instructions="Single-string interface. Call with 'help' to receive JSON schema instructions; otherwise pass JSON wrapped in braces.",
+    instructions="BEFORE YOU USE THIS, call with the string 'help'.",
 )
 
 class ImageRequest(BaseModel):
-    prompt: str = Field(..., min_length=1, description="Natural-language description of the desired image.")
+    prompt: str = Field(..., min_length=1, description="Use long descriptive, narrative framing. Provide technical details, for example specify camera angles, lens types, and lighting for photorealism; art style and background color for assets; font, text content, and layout for typography. Execute edits by ingesting reference images and directing semantic changes: masking for inpainting, merging inputs for composites, or applying style transfers—while explicitly commanding strict preservation of critical details. Structure prompts with hyper-specificity, declared intent, step-by-step logic for complex scenes, and use positive phrasing ('empty street' not 'no cars'). The picture can include lots of text.")
     output_dir: str = Field(
         ...,
         min_length=1,
-        description="Existing directory path where lossless WebP files will be saved. Directory must already exist.",
+        description="Directory where lossless WebP files will be saved. Directory must already exist.",
     )
     reference_images: Optional[list[str]] = Field(
         default=None,
         description=(
-            "Optional list (max 14) of local file paths or http(s) URLs used for conditioning. "
-            "In the prompt, describe each reference image and its role without using filenames "
-            "(e.g., 'restyle the dog in the style of the watercolor')."
+            "Optional list (recommend 0-3, max 14) of local file paths or http(s) URLs used for image reference. In the prompt, explain how to use these images, but refer to them by their relevant content not their filenames (e.g., 'restyle the image of the dog in the style of the watercolor')."
         ),
     )
     aspect_ratio: Optional[
         Literal["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"]
     ] = Field(
         default=None,
-        description="Optional aspect ratio; must be one of the allowed presets.",
+        description="Optional aspect ratio.",
     )
     image_size: Literal["1K", "2K", "4K"] = Field(
         default="2K",
-        description="Render size preset; 2K is the default for quality/speed balance.",
-    )
-    negative_prompt: Optional[str] = Field(
-        default=None,
-        description="Content to avoid (may be ignored by preview surface).",
-    )
-    seed: Optional[int] = Field(
-        default=None,
-        description="Optional deterministic seed when supported.",
+        description="Render size preset; 2K is the recommended default.",
     )
 
 
 def _help_payload() -> dict:
     instructions = (
         "image_generate takes a single string argument. Call with JSON wrapped in braces to generate an image. "
-        "If you need guidance, call with 'help' (or any string without braces) to receive this documentation. "
-        "Fields: "
-        "prompt (required string), "
-        "output_dir (required existing directory), "
-        "reference_images (optional list of up to 14 file paths or http(s) URLs; describe each in the prompt without filenames), "
-        "aspect_ratio (optional preset: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 9:21), "
-        "image_size (1K, 2K [default], 4K), "
-        "negative_prompt (optional), "
-        "seed (optional). "
-        "Output is always lossless WebP; the directory must already exist."
     )
     return {"instructions": instructions, "schema": ImageRequest.model_json_schema()}
 
@@ -345,7 +325,6 @@ async def generate_image(
             aspect_ratio=aspect_ratio,
             image_size=req.image_size,
         ),
-        # NOTE: negative prompts and seeds are not exposed in the current preview generate_content surface.
     )
 
     contents = [types.Part.from_text(text=prompt)]
@@ -359,7 +338,6 @@ async def generate_image(
         prompt=prompt[:240],
         aspect_ratio=aspect_ratio,
         image_size=req.image_size,
-        seed=req.seed,
         reference_images=len(reference_images or []),
         safety_filter_level="BLOCK_NONE",
         person_generation="ALLOW_ALL",
@@ -408,7 +386,6 @@ async def generate_image(
             {
                 "path": path,
                 "mime_type": mime,
-                "seed": req.seed,
                 "enhanced_prompt": None,
                 "safety": None,
             }

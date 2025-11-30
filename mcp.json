@@ -1,6 +1,5 @@
 {
   "name": "mcp_generate_image",
-  "description": "Gemini image generation MCP server",
   "command": "python",
   "args": ["server.py"],
   "env": {
