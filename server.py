@@ -254,8 +254,8 @@ class ImageRequest(BaseModel):
         description="Optional aspect ratio.",
     )
     image_size: Literal["1K", "2K", "4K"] = Field(
-        default="2K",
-        description="Render size preset; 2K is the recommended default.",
+        default="1K",
+        description="Render size preset; 1K is the recommended default.",
     )
 
 
