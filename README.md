@@ -1,21 +1,53 @@
-## Tool: image_generate
+## mcp_generate_image - Let Your Agent Make Art
 
-This MCP has an unusual interface, so it only uses up a few tokens of context. When the LLM wants to make an image, it calls it with "help" and gets the full json schema. 
+Y
 
-It uses Z-image (fast, good, cheap) or nano banana pro (better) to generate images.
+### Install (quick)
+- Windows PowerShell:
+```pwsh
+python -m venv .venv; .\.venv\Scripts\Activate.ps1; pip install -r requirements.txt
+```
+- WSL/bash:
+```bash
+python -m venv .venv-wsl && source .venv-wsl/bin/activate && pip install -r requirements.txt
+```
+- Env file: copy `.env.example` to `.env`, then fill:
+```
+GEMINI_API_KEY=...      # or GOOGLE_API_KEY / Vertex envs
+FAL_KEY=...             # or FAL_API_KEY for the FAL models
+```
+- Create an output folder: `mkdir outputs`
 
-Perfect for having your friendly coding agent design a full website, game, or multibillion-dollar SaaS product!
+### Generate an image
+- Codex CLI:
+```bash
+codex exec --skip-git-repo-check "Call mcp_generate_image.image_generate with '{\"prompt\":\"line art coffee cup\",\"output_dir\":\"outputs\"}'"
+```
+- Claude CLI:
+```bash
+claude "Call mcp_generate_image.image_generate with {\"prompt\":\"tiny line art coffee mug\",\"output_dir\":\"outputs\",\"model\":\"z-image turbo (fast)\"}"
+```
+Send `"help"` if you want the live schema and option list.
 
-
-
-### What you get when you tell it "help"
-- `prompt` (required): what to draw.
-- `output_dir` (required): existing directory where the WebP will be written; must already exist and be writable.
-- `reference_images` (optional): list of 1–14 local paths or http(s) URLs to PNG/JPEG/WebP. Every attachment is fetched/validated (≤20MB, decodable). In the prompt, describe each reference image and how to use it **without naming files** (e.g., “restyle the dog in the style of the watercolor”).
-- `aspect_ratio` (optional): one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 9:21.
+### Options you can set
+- `prompt` (required): what to draw; include style, lighting, lenses, text, layout.
+- `output_dir` (required): existing writable directory; files are saved as lossless WebP.
+- `reference_images` (optional): list of 1-14 local paths or http(s) URLs (PNG/JPEG/WebP, <=20MB each). Describe their content in the prompt, not filenames.
+- `aspect_ratio` (optional): 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 9:21.
 - `image_size` (optional, default 1K): 1K | 2K | 4K.
-- `model` (optional, requires FAL_KEY/FAL_API_KEY): "z-image turbo (fast)" | "nano banana pro (best)". Hidden from help unless a FAL key is set. FAL calls are forced to `output_format=webp` and saved as-is when already WebP.
+- `model` (optional, shown only when a FAL key is present): `z-image turbo (fast)` | `nano banana pro (best)`. FAL calls force `output_format=webp`; returned WebPs are written as-is, other formats are converted once to lossless WebP.
 
-### Behavior
-- Outputs **lossless WebP** only; filenames are sanitized from the prompt (spaces→`_`, max ~60 chars, collisions get `-001`, `-002`, …).
-- Fails fast if `output_dir` is missing/not a directory or if any attachment is invalid.
+### Behavior and guarantees
+- Output is always WebP; filenames are prompt-sanitized (spaces -> `_`, max ~60 chars, collisions get `-001`, `-002`, ...).
+- Validation catches empty prompts, missing/non-directory output paths, oversized/invalid reference images.
+- With a FAL key and `model` set, requests route to FAL; otherwise Gemini is used.
+
+### Fresh sample renders (in `outputs/`)
+- `outputs/futuristic_creative_workstation_at_night__laptop_running_an_.webp`
+- `outputs/hand-drawn_line_art_schematic_of_an_AI_image_pipeline__arrow.webp`
+- `outputs/bold_hero_banner_showing_a_glowing_WebP_badge_hovering_above.webp`
+
+### Troubleshooting
+- "model is only available..." -> set `FAL_KEY` or `FAL_API_KEY` and retry.
+- "output_dir ... does not exist" -> create the folder first.
+- If a client can't find the tool schema, call the tool with `"help"` to refresh it.
