@@ -12,8 +12,11 @@ from __future__ import annotations
 import base64
 import asyncio
 import json
+import logging
+from logging.handlers import RotatingFileHandler
 import mimetypes
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -38,17 +41,130 @@ MAX_IMAGE_BYTES = 20 * 1024 * 1024  # 20MB hard cap to match Gemini guidance
 ALLOWED_REF_FORMATS = {"PNG": "image/png", "JPEG": "image/jpeg", "JPG": "image/jpeg", "WEBP": "image/webp"}
 FAL_ENV_VARS = ("FAL_KEY", "FAL_API_KEY")
 MAX_FAL_IMAGE_BYTES = 40 * 1024 * 1024  # allow larger model outputs
+LOG_DIR = BASE_DIR / "logs"
+LOG_FILE = LOG_DIR / "server.log"
+
+LOG_DIR.mkdir(exist_ok=True)
+_logger = logging.getLogger("mcp_generate_image")
+if not _logger.handlers:
+    _logger.setLevel(logging.INFO)
+    file_handler = RotatingFileHandler(
+        LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    stream_handler = logging.StreamHandler(sys.stderr)
+    formatter = logging.Formatter("%(message)s")
+    file_handler.setFormatter(formatter)
+    stream_handler.setFormatter(formatter)
+    _logger.addHandler(file_handler)
+    _logger.addHandler(stream_handler)
+    _logger.propagate = False
+
+
+def _pick_interpreter() -> str:
+    candidates = [
+        BASE_DIR / ".venv" / "Scripts" / "python.exe",  # Windows venv
+        BASE_DIR / ".venv-wsl" / "bin" / "python",      # WSL venv
+        BASE_DIR / ".venv" / "bin" / "python",          # POSIX venv
+    ]
+    for path in candidates:
+        if path.exists():
+            return str(path)
+    return sys.executable
+
+
+def _maybe_reexec() -> None:
+    """Keep the CLI interface the same (python server.py) but hop into the right venv if present."""
+    target = _pick_interpreter()
+    if Path(sys.executable).resolve() == Path(target).resolve():
+        return
+    # Avoid infinite loops if something goes wrong.
+    if os.environ.get("MCP_IMAGE_REEXEC") == "1":
+        return
+    os.environ["MCP_IMAGE_REEXEC"] = "1"
+    os.execv(target, [target, __file__])
 
 
 def log_event(level: str, message: str, **fields: object) -> None:
-    """Emit a plain-English log line to stderr (no key/values)."""
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%fZ")
-    extras = ""
+    """Emit a structured JSON log line (to file + stderr)."""
+    ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    record = {"ts": ts, "level": level.upper(), "message": message, "pid": os.getpid()}
     if fields:
-        extras = " ".join(str(v) for v in fields.values())
-    line = f"[{ts}] {level.upper()} - {message} {extras}".strip()
-    sys.stderr.write(line + "\n")
-    sys.stderr.flush()
+        record.update(fields)
+    try:
+        level_no = getattr(logging, level.upper(), logging.INFO)
+        _logger.log(level_no, json.dumps(record, ensure_ascii=False))
+    except Exception:
+        # Fall back to stderr if logging stack misbehaves.
+        sys.stderr.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+
+_DOTENV_LOADED_FLAG = "MCP_IMAGE_DOTENV_LOADED"
+
+
+def _load_dotenv_if_present(dotenv_path: Path | None = None) -> None:
+    """
+    Load a local .env into this process environment (without overriding existing vars).
+
+    Many MCP clients do not automatically load .env for subprocesses. This keeps
+    local usage consistent with README expectations while remaining safe for
+    hosted environments (existing env vars always win).
+    """
+    if os.environ.get(_DOTENV_LOADED_FLAG) == "1":
+        return
+    os.environ[_DOTENV_LOADED_FLAG] = "1"
+
+    path = dotenv_path or (BASE_DIR / ".env")
+    if not path.exists():
+        return
+
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except Exception as e:
+        log_event(
+            "warning",
+            "dotenv.read_failed",
+            path=str(path),
+            error_type=type(e).__name__,
+            error=str(e),
+        )
+        return
+
+    loaded: list[str] = []
+    for raw_line in raw.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            continue
+        if key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+            value = value[1:-1]
+        os.environ[key] = value
+        loaded.append(key)
+
+    if loaded:
+        log_event("info", "dotenv.loaded", path=str(path), loaded=len(loaded), keys=loaded)
+
+
+def _install_excepthook() -> None:
+    """Log uncaught exceptions so crashes are visible in logs/server.log."""
+
+    def _hook(exc_type, exc, tb):
+        try:
+            log_event(
+                "error",
+                "uncaught_exception",
+                error_type=getattr(exc_type, "__name__", str(exc_type)),
+                error=str(exc),
+            )
+        finally:
+            sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = _hook
 
 
 def _get_fal_api_key() -> Optional[str]:
@@ -483,7 +599,7 @@ class ImageRequest(BaseModel):
 
 def _help_payload() -> dict:
     instructions = (
-        "image_generate takes a single string argument. Call with JSON wrapped in braces to generate an image. "
+        "image_generate takes a single string argument. Call with JSON wrapped in braces to generate an image. When calling via CLI, wrap the whole request in single quotes so shells do not misparse the JSON."
     )
     schema = ImageRequest.model_json_schema()
     if not _get_fal_api_key():
@@ -680,5 +796,15 @@ async def generate_image(
 
 
 if __name__ == "__main__":
-    server.run(transport="stdio")
-
+    _install_excepthook()
+    _load_dotenv_if_present()
+    _maybe_reexec()
+    try:
+        log_event("info", "server.start", interpreter=sys.executable)
+        server.run(transport="stdio")
+    except Exception as e:
+        if isinstance(e, BaseExceptionGroup):
+            log_event("error", "server.exception_group", error=str(e))
+        else:
+            log_event("error", "server.crash", error_type=type(e).__name__, error=str(e))
+        raise
