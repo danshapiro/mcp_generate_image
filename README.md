@@ -61,15 +61,6 @@ Any stdio-capable MCP client can launch `python server.py` with the same env var
 - Validation catches empty prompts, missing/non-directory output paths, oversized/invalid reference images.
 - With a FAL key and `model` set, requests route to FAL; otherwise Gemini is used.
 
-### Fresh sample renders (in `outputs/`)
-- `outputs/surreal_neon_rainforest_with_bioluminescent_vines__reflectiv.webp` (synthwave jungle)
-- `outputs/coffee-powered_robot_barista_sketching_UI_wireframes_on_a_ho.webp` (comic barista bot)
-- `outputs/floating_library_of_glass_cubes__each_cube_showing_a_differe.webp` (floating app-gallery library)
-- `outputs/galactic_koi_fish_made_of_chrome_swimming_through_a_ring_of_.webp` (chrome koi + glowing WebP ring)
-- `outputs/futuristic_creative_workstation_at_night__laptop_running_an_.webp` (agent ops desk)
-- `outputs/hand-drawn_line_art_schematic_of_an_AI_image_pipeline__arrow.webp` (pipeline line art)
-- `outputs/bold_hero_banner_showing_a_glowing_WebP_badge_hovering_above.webp` (WebP hero badge)
-
 ### Troubleshooting
 - "model is only available..." -> set `FAL_KEY` or `FAL_API_KEY` and retry.
 - "output_dir ... does not exist" -> create the folder first.
